@@ -15,6 +15,7 @@ class ClientInfo:
         self.addr = addr
         self.username = username
         self.room = room
+        
 
 class ChatServer:
     def __init__(self, host: str, port: int):
@@ -24,7 +25,11 @@ class ChatServer:
         self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.clients: Dict[socket.socket, ClientInfo] = {}
         self.lock = threading.RLock()
+        self.admins = set(["admin"])
 
+    def is_admin(self, username: str) -> bool:
+        return username in self.admins
+    
     def start(self):
         self.server.bind((self.host, self.port))
         self.server.listen(50)
@@ -126,6 +131,7 @@ class ChatServer:
                             "Commands:\n"
                             "/help                 Show this help\n"
                             "/join ROOM            Join or create ROOM\n"
+                            "/lobby                Go Back To Lobby\n"
                             "/list                 List users in your room\n"
                             "/w USER MESSAGE       Whisper/private message USER\n"
                             "/quit                 Disconnect\n"
@@ -139,6 +145,16 @@ class ChatServer:
                         with self.lock:
                             info = self.clients.get(conn)
                             old_room = info.room
+                            if old_room != new_room:
+                                self.system(old_room, f"{info.username} left {old_room}")
+                                info.room = new_room
+                                conn.sendall(f"Joined room {new_room}\n".encode(ENC))
+                                self.system(new_room, f"{info.username} joined {new_room}")
+                    elif cmd == "/lobby": 
+                        with self.lock:
+                            info = self.clients.get(conn)
+                            old_room = info.room
+                            new_room = "lobby"
                             if old_room != new_room:
                                 self.system(old_room, f"{info.username} left {old_room}")
                                 info.room = new_room
@@ -161,6 +177,21 @@ class ChatServer:
                             conn.sendall(f"User {to_user} not found or delivery failed.\n".encode(ENC))
                     elif cmd == "/quit":
                         break
+
+                    elif cmd == "/shutdown":
+                        with self.lock:
+                            info = self.clients.get(conn)
+                            if not self.is_admin(info.username):
+                                conn.sendall(b"You do not have permission for /shutdown\n")
+                                continue
+                            conn.sendall(b"Shutting down server...\n")
+                            for c in list(self.clients.keys()):
+                                try:
+                                    c.shutdown(socket.SHUT_RDWR)
+                                    c.close()
+                                except Exception:
+                                    pass
+                        self.server.close()
                     else:
                         conn.sendall(b"Unknown command. Try /help\n")
                 else:
